@@ -1,6 +1,7 @@
 # IssueRadar
 
 IssueRadar is a FastAPI app for searching GitHub issues and pull requests, then ranking the most relevant results for your query.
+<img width="1633" height="1069" alt="Screenshot 2026-02-17 at 9 25 21 PM" src="https://github.com/user-attachments/assets/fa7b658b-395d-4fb5-a2c6-21701a736c5d" />
 
 It ships with:
 - A web UI at `/`
