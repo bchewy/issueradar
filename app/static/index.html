@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IssueRadar</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-frame">
+      <header class="header">
+        <div class="header-left">
+          <h1 class="logo">IssueRadar</h1>
+          <span class="header-sep"></span>
+          <p class="tagline">AI-powered GitHub issue &amp; PR search</p>
+        </div>
+        <div id="authArea" class="auth-area">
+          <a id="loginBtn" class="auth-pill" href="/auth/github/login">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            Sign in
+          </a>
+          <div id="userInfo" class="auth-pill auth-pill--user hidden">
+            <img id="userAvatar" class="auth-avatar" src="" alt="" />
+            <span id="userName" class="auth-username"></span>
+            <span class="auth-sep"></span>
+            <button id="logoutBtn" class="auth-logout" type="button">sign out</button>
+          </div>
+        </div>
+        <span id="statusPill" class="status-pill idle">Idle</span>
+      </header>
+
+      <div class="layout">
+        <section class="search-panel">
+          <form id="searchForm" novalidate>
+            <div class="field-group">
+              <label for="repoInput">Repository</label>
+              <textarea id="repoInput" name="repoInput" rows="1" placeholder="owner/repo" autocomplete="off" class="auto-grow"></textarea>
+              <span class="field-hint">Comma or newline for multiple repos</span>
+            </div>
+
+            <div class="field-group">
+              <label for="query">Query</label>
+              <textarea
+                id="query"
+                name="query"
+                rows="3"
+                required
+                placeholder="Invalid codec header..."
+              ></textarea>
+            </div>
+
+            <div class="field-group">
+              <label for="context">Context <span class="optional">optional</span></label>
+              <textarea
+                id="context"
+                name="context"
+                rows="2"
+                placeholder="OS, runtime, versions, stack trace"
+              ></textarea>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="filter-row">
+              <span class="filter-label">Type</span>
+              <div class="seg-control">
+                <input type="radio" name="type" value="both" id="type-both" checked />
+                <label for="type-both">Both</label>
+                <input type="radio" name="type" value="issue" id="type-issue" />
+                <label for="type-issue">Issues</label>
+                <input type="radio" name="type" value="pr" id="type-pr" />
+                <label for="type-pr">PRs</label>
+              </div>
+            </div>
+
+            <div class="filter-row">
+              <span class="filter-label">State</span>
+              <div class="seg-control">
+                <input type="radio" name="state" value="all" id="state-all" checked />
+                <label for="state-all">All</label>
+                <input type="radio" name="state" value="open" id="state-open" />
+                <label for="state-open">Open</label>
+                <input type="radio" name="state" value="closed" id="state-closed" />
+                <label for="state-closed">Closed</label>
+              </div>
+            </div>
+
+            <div class="filter-row compact-nums">
+              <div class="num-field">
+                <span class="filter-label">Results</span>
+                <input id="limit" name="limit" type="number" min="1" max="50" value="10" />
+              </div>
+              <div class="num-field">
+                <span class="filter-label">Pool</span>
+                <input id="candidate_pool" name="candidate_pool" type="number" min="1" max="100" value="30" />
+              </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="labels-group">
+              <div class="field-group compact">
+                <label for="labels_include"><span class="label-icon include">+</span> Include</label>
+                <input id="labels_include" name="labels_include" type="text" placeholder="bug, help wanted" />
+              </div>
+              <div class="field-group compact">
+                <label for="labels_exclude"><span class="label-icon exclude">&minus;</span> Exclude</label>
+                <input id="labels_exclude" name="labels_exclude" type="text" placeholder="duplicate, wontfix" />
+              </div>
+            </div>
+
+            <div class="toggle-row">
+              <label class="toggle-label">
+                <input id="include_comments" name="include_comments" type="checkbox" checked />
+                <span class="toggle-track"></span>
+                <span>Comments</span>
+              </label>
+              <label class="toggle-label">
+                <input id="include_pr_files" name="include_pr_files" type="checkbox" />
+                <span class="toggle-track"></span>
+                <span>PR files</span>
+              </label>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <div class="actions">
+              <button id="submitBtn" class="btn primary" type="submit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                Search
+                <kbd class="kbd-hint">&hairsp;&#8984;&#9166;&hairsp;</kbd>
+              </button>
+            </div>
+
+            <div class="actions-secondary">
+              <button id="settingsBtn" class="btn-link" type="button">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                Keys &amp; tokens
+              </button>
+              <button id="resetBtn" class="btn-link muted" type="button">Reset</button>
+            </div>
+
+            <div id="settingsPopover" class="settings-popover">
+              <div class="settings-header">
+                <span>Keys &amp; tokens</span>
+                <button id="settingsClose" class="settings-close" type="button">&times;</button>
+              </div>
+              <div class="field-group">
+                <label for="github_token">GitHub token <span class="optional">optional</span></label>
+                <input id="github_token" name="github_token" type="password" autocomplete="off" placeholder="ghp_..." />
+                <p id="oauthTokenNote" class="oauth-note hidden">&#10003; Connected via GitHub OAuth (5,000 req/hr)</p>
+              </div>
+              <div class="field-group">
+                <label for="llm_key">LLM key <span class="optional">optional</span></label>
+                <input id="llm_key" name="llm_key" type="password" autocomplete="off" placeholder="sk-..." />
+              </div>
+            </div>
+
+            <p id="formError" class="form-error" role="alert" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section class="results-panel">
+          <div id="metaBar" class="meta-bar hidden"></div>
+          <div id="warnings" class="warnings"></div>
+          <div id="results" class="results"></div>
+        </section>
+      </div>
+    </main>
+
+    <template id="resultTemplate">
+      <article class="result-card">
+        <div class="result-head">
+          <div class="score-area">
+            <span class="score-value">0</span>
+            <div class="score-track"><span class="score-fill"></span></div>
+          </div>
+          <span class="badge"></span>
+        </div>
+        <a class="title" target="_blank" rel="noopener noreferrer"></a>
+        <p class="meta"></p>
+        <p class="summary"></p>
+        <div class="why-block">
+          <h3>Why this matches</h3>
+          <ul class="why-list"></ul>
+        </div>
+        <div class="signals"></div>
+      </article>
+    </template>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

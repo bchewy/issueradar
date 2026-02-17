@@ -1,0 +1,67 @@
+Metadata-Version: 2.4
+Name: github-issuereader
+Version: 0.1.0
+Summary: FastAPI service to find relevant GitHub issues and pull requests
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0.0,>=0.115.0
+Requires-Dist: httpx<1.0.0,>=0.27.0
+Requires-Dist: openai<2.0.0,>=1.50.0
+Requires-Dist: pydantic<3.0.0,>=2.8.0
+Requires-Dist: pydantic-settings<3.0.0,>=2.4.0
+Requires-Dist: uvicorn[standard]<1.0.0,>=0.30.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.3.0; extra == "dev"
+Requires-Dist: pytest-asyncio<1.0.0,>=0.24.0; extra == "dev"
+
+# GitHub Issues/PR Relevance Finder API
+
+FastAPI service that searches GitHub Issues and Pull Requests, enriches candidate threads, and re-ranks them for relevance with an LLM pass.
+
+## Features (MVP)
+- `GET /health`
+- `POST /v1/search`
+- `POST /v1/repos/validate`
+- Repo-scoped GitHub Search API retrieval
+- Optional issue comments and PR files enrichment
+- LLM relevance scoring with strict JSON output (OpenAI Responses API)
+- Fail-soft fallback ranker when LLM is unavailable
+- In-memory TTL cache with ETag support for GitHub search requests
+- Rate-limit aware retries with jitter and warning metadata
+
+## Quickstart
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+uvicorn app.main:app --reload
+```
+
+## Environment
+
+Copy `.env.example` to `.env` if needed.
+
+- `OPENAI_API_KEY` (optional, can also be passed per request via `X-LLM-Provider-Key`)
+- `OPENAI_MODEL` (default: `gpt-4.1-mini`)
+- `GITHUB_API_BASE` (default: `https://api.github.com`)
+
+## Example request
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/search \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <github_token_optional>' \
+  -H 'X-LLM-Provider-Key: <openai_key_optional>' \
+  -d '{
+    "repo": "owner/repo",
+    "query": "Invalid codec header",
+    "context": "macOS 14 python 3.12",
+    "type": "both",
+    "state": "all",
+    "limit": 10,
+    "candidate_pool": 30,
+    "include_comments": true,
+    "include_pr_files": false
+  }'
+```
