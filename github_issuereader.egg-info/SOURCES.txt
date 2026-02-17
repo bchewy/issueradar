@@ -1,6 +1,7 @@
 README.md
 pyproject.toml
 app/__init__.py
+app/auth.py
 app/cache.py
 app/config.py
 app/github.py
@@ -15,3 +16,6 @@ github_issuereader.egg-info/dependency_links.txt
 github_issuereader.egg-info/requires.txt
 github_issuereader.egg-info/top_level.txt
 tests/test_api.py
+tests/test_auth.py
+tests/test_github_client.py
+tests/test_llm_cache.py

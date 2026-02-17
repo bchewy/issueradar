@@ -9,6 +9,7 @@ Requires-Dist: httpx<1.0.0,>=0.27.0
 Requires-Dist: openai<2.0.0,>=1.50.0
 Requires-Dist: pydantic<3.0.0,>=2.8.0
 Requires-Dist: pydantic-settings<3.0.0,>=2.4.0
+Requires-Dist: itsdangerous<3.0.0,>=2.1.0
 Requires-Dist: uvicorn[standard]<1.0.0,>=0.30.0
 Provides-Extra: dev
 Requires-Dist: pytest<9.0.0,>=8.3.0; extra == "dev"
@@ -64,4 +65,29 @@ curl -X POST http://127.0.0.1:8000/v1/search \
     "include_comments": true,
     "include_pr_files": false
   }'
+```
+
+## End-to-End Browser Testing (agent-browser)
+
+Install and set up agent-browser for Codex:
+
+```bash
+npx skills add vercel-labs/agent-browser -g -a codex -y
+agent-browser install
+```
+
+Run the E2E flow against the local UI:
+
+```bash
+./scripts/e2e_agent_browser.sh
+```
+
+Artifacts are saved under `artifacts/e2e/`:
+- `e2e-ui.png` (browser screenshot)
+- `e2e-summary.json` (result count, status pill text, warnings, form error)
+
+Optional overrides:
+
+```bash
+E2E_REPO=fastapi/fastapi E2E_QUERY='pydantic v2 error' ./scripts/e2e_agent_browser.sh
 ```

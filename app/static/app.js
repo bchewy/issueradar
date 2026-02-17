@@ -25,12 +25,91 @@ const OAUTH_NOTE = $("#oauthTokenNote");
 
 let authState = { logged_in: false };
 
+const PRESETS = {
+  "codex-network": {
+    repo: "openai/codex",
+    query: "network connection error timeout",
+    context: "Debugging network issues, connection drops, timeouts, retry failures",
+    type: "both",
+    state: "all",
+    include_comments: true,
+    include_pr_files: false,
+    limit: 10,
+    candidate_pool: 30,
+  },
+};
+
+$("#presetChips").addEventListener("click", (e) => {
+  const btn = e.target.closest(".preset-chip");
+  if (!btn) return;
+  const preset = PRESETS[btn.dataset.preset];
+  if (!preset) return;
+
+  if (preset.repo) { REPO_INPUT.value = preset.repo; autoGrow(REPO_INPUT); }
+  if (preset.query) $("#query").value = preset.query;
+  $("#context").value = preset.context || "";
+  if (preset.type) $(`#type-${preset.type}`).checked = true;
+  if (preset.state) $(`#state-${preset.state}`).checked = true;
+  if (preset.limit) $("#limit").value = preset.limit;
+  if (preset.candidate_pool) $("#candidate_pool").value = preset.candidate_pool;
+  $("#include_comments").checked = !!preset.include_comments;
+  $("#include_pr_files").checked = !!preset.include_pr_files;
+  $("#labels_include").value = preset.labels_include || "";
+  $("#labels_exclude").value = preset.labels_exclude || "";
+
+  $$(".preset-chip").forEach((c) => c.classList.remove("active"));
+  btn.classList.add("active");
+});
+
 const INITIAL_HTML = `<div class="initial-state">
   <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
   <p>Search for issues and pull requests</p>
 </div>`;
 
-const LOADING_HTML = '<div class="loading-state"><div class="spinner"></div></div>';
+const LOADING_MESSAGES = [
+  "Searching GitHub\u2026",
+  "Scanning issues & PRs\u2026",
+  "Fetching candidates\u2026",
+  "Ranking by relevance\u2026",
+  "Almost there\u2026",
+];
+
+let loadingInterval = null;
+
+function buildLoadingHTML() {
+  const skeleton = `<div class="skeleton-card">
+    <div class="skeleton-head"><div class="skeleton-line w40"></div><div class="skeleton-badge"></div></div>
+    <div class="skeleton-line w80"></div>
+    <div class="skeleton-line w60"></div>
+    <div class="skeleton-line w90"></div>
+    <div class="skeleton-line w45"></div>
+  </div>`;
+  return `<div class="loading-state">
+    <div class="loading-progress"><div class="loading-progress-bar"></div></div>
+    <div class="loading-message">${LOADING_MESSAGES[0]}</div>
+    <div class="skeleton-list">${skeleton}${skeleton}${skeleton}</div>
+  </div>`;
+}
+
+function startLoadingMessages() {
+  stopLoadingMessages();
+  let i = 0;
+  loadingInterval = setInterval(() => {
+    i = (i + 1) % LOADING_MESSAGES.length;
+    const el = $(".loading-message");
+    if (el) {
+      el.classList.add("fade-swap");
+      setTimeout(() => {
+        el.textContent = LOADING_MESSAGES[i];
+        el.classList.remove("fade-swap");
+      }, 200);
+    }
+  }, 2400);
+}
+
+function stopLoadingMessages() {
+  if (loadingInterval) { clearInterval(loadingInterval); loadingInterval = null; }
+}
 
 let abortController = null;
 
@@ -89,7 +168,12 @@ FORM.addEventListener("submit", async (e) => {
   setStatus("loading", "Searching\u2026");
   SUBMIT_BTN.disabled = true;
   clearResults();
-  RESULTS_CONTAINER.innerHTML = LOADING_HTML;
+  RESULTS_CONTAINER.innerHTML = buildLoadingHTML();
+  startLoadingMessages();
+
+  const t0 = performance.now();
+  console.group("%c[IssueRadar] Search", "color:#3b82f6;font-weight:bold");
+  console.log("%cRequest payload:", "color:#a1a1aa", payload);
 
   try {
     const res = await fetch("/v1/search", {
@@ -98,6 +182,9 @@ FORM.addEventListener("submit", async (e) => {
       body: JSON.stringify(payload),
       signal: abortController.signal,
     });
+
+    const networkMs = Math.round(performance.now() - t0);
+    console.log(`%cHTTP ${res.status} in ${networkMs}ms`, res.ok ? "color:#22c55e" : "color:#ef4444");
 
     if (!res.ok) {
       const err = await res.json().catch(() => null);
@@ -110,12 +197,36 @@ FORM.addEventListener("submit", async (e) => {
     }
 
     const data = await res.json();
+    const totalMs = Math.round(performance.now() - t0);
+
+    const m = data.meta;
+    console.log(
+      `%cResults: ${data.results.length} | Candidates searched: ${m.candidates_searched} | Total found: ${m.total_found}`,
+      "color:#fafafa"
+    );
+    console.log(
+      `%cServer: ${m.took_ms}ms | Network round-trip: ${networkMs}ms | Total: ${totalMs}ms`,
+      "color:#a1a1aa"
+    );
+    console.log(
+      `%c${m.cached ? "CACHED (in-memory hit)" : "FRESH (GitHub API + LLM rerank)"}`,
+      m.cached ? "color:#eab308;font-weight:bold" : "color:#22c55e;font-weight:bold"
+    );
+    if (m.rate_limited) console.warn("Rate limited by GitHub API");
+    if (m.warnings?.length) console.warn("Warnings:", m.warnings);
+    if (m.rate_limit) console.log("%cRate limit:", "color:#a1a1aa", m.rate_limit);
+    console.log("%cFull response meta:", "color:#71717a", m);
+    console.groupEnd();
+
     renderMeta(data.meta);
     renderWarnings(data.meta.warnings);
     renderResults(data.results);
     setStatus("done", `${data.results.length} result${data.results.length !== 1 ? "s" : ""}`);
   } catch (err) {
-    if (err.name === "AbortError") return;
+    console.error("Search failed:", err.message);
+    console.groupEnd();
+    if (err.name === "AbortError") { stopLoadingMessages(); return; }
+    stopLoadingMessages();
     RESULTS_CONTAINER.innerHTML = "";
     FORM_ERROR.textContent = err.message;
     setStatus("error", "Failed");
@@ -170,6 +281,7 @@ function setStatus(state, text) {
 }
 
 function clearResults() {
+  stopLoadingMessages();
   RESULTS_CONTAINER.innerHTML = "";
   META_BAR.innerHTML = "";
   META_BAR.classList.add("hidden");

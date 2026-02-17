@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=2" />
   </head>
   <body>
     <main class="app-frame">
@@ -38,6 +38,15 @@
       <div class="layout">
         <section class="search-panel">
           <form id="searchForm" novalidate>
+            <div class="presets-row">
+              <span class="presets-label">Presets</span>
+              <div class="presets-chips" id="presetChips">
+                <button type="button" class="preset-chip" data-preset="codex-network">Codex network</button>
+              </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
             <div class="field-group">
               <label for="repoInput">Repository</label>
               <textarea id="repoInput" name="repoInput" rows="1" placeholder="owner/repo" autocomplete="off" class="auto-grow"></textarea>
@@ -194,6 +203,6 @@
       </article>
     </template>
 
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/app.js?v=3"></script>
   </body>
 </html>

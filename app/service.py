@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import Settings
 from app.github import GitHubAPIError, GitHubCallMeta, GitHubClient
+
+logger = logging.getLogger("issueradar")
 from app.llm import RankedItem, RelevanceReranker
 from app.models import (
     RepoValidateResponse,
@@ -105,6 +108,13 @@ class SearchService:
         repos = request.repos or ([] if not request.repo else [request.repo])
         candidate_targets = self._split_candidate_pool(request.candidate_pool, repos)
 
+        logger.info("── Search ──────────────────────────────────────")
+        logger.info("  repos=%s  query=%r  type=%s  state=%s", repos, request.query, request.type, request.state)
+        logger.info("  pool=%d  limit=%d  token=%s  llm_key=%s",
+                     request.candidate_pool, request.limit,
+                     "yes" if github_token else "no",
+                     "yes" if llm_api_key else "no")
+
         search_tasks = [
             self._search_repo(
                 repo=repo,
@@ -115,12 +125,15 @@ class SearchService:
             for repo, repo_pool in candidate_targets
         ]
 
+        t_gh = time.perf_counter()
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        gh_ms = int((time.perf_counter() - t_gh) * 1000)
 
         candidates: list[dict[str, Any]] = []
         for result in search_results:
             if isinstance(result, Exception):
                 meta_acc.warnings.append(f"Search call failed: {type(result).__name__}")
+                logger.warning("  GitHub search error: %s – %s", type(result).__name__, result)
                 if isinstance(result, GitHubAPIError):
                     meta_acc.rate_limited = meta_acc.rate_limited or result.rate_limited
                 continue
@@ -129,8 +142,43 @@ class SearchService:
             meta_acc.merge(repo_meta)
             candidates.extend(repo_items)
 
+        logger.info("  GitHub search: %d candidates in %dms (cached=%s)", len(candidates), gh_ms, meta_acc.cached)
+
+        # If strict query (query + context) returns nothing, retry with query-only.
+        if not candidates and request.context:
+            logger.info("  Strict search returned 0; retrying with query-only (context removed)")
+            relaxed_request = request.model_copy(update={"context": None})
+            relaxed_tasks = [
+                self._search_repo(
+                    repo=repo,
+                    repo_pool=repo_pool,
+                    request=relaxed_request,
+                    github_token=github_token,
+                )
+                for repo, repo_pool in candidate_targets
+            ]
+            t_retry = time.perf_counter()
+            relaxed_results = await asyncio.gather(*relaxed_tasks, return_exceptions=True)
+            retry_ms = int((time.perf_counter() - t_retry) * 1000)
+
+            for result in relaxed_results:
+                if isinstance(result, Exception):
+                    meta_acc.warnings.append(f"Relaxed search call failed: {type(result).__name__}")
+                    logger.warning("  Relaxed GitHub search error: %s – %s", type(result).__name__, result)
+                    if isinstance(result, GitHubAPIError):
+                        meta_acc.rate_limited = meta_acc.rate_limited or result.rate_limited
+                    continue
+
+                repo_items, repo_meta = result
+                meta_acc.merge(repo_meta)
+                candidates.extend(repo_items)
+
+            logger.info("  Relaxed search: %d candidates in %dms", len(candidates), retry_ms)
+
         if not candidates:
             took_ms = int((time.perf_counter() - started) * 1000)
+            logger.info("  No candidates found – returning empty in %dms", took_ms)
+            logger.info("────────────────────────────────────────────────")
             return SearchResponse(results=[], meta=meta_acc.build(took_ms=took_ms))
 
         unique_candidates = self._dedupe_candidates(candidates)
@@ -139,20 +187,27 @@ class SearchService:
 
         prepared = self._prepare_candidates(unique_candidates)
         meta_acc.candidates_searched = len(prepared)
+        logger.info("  Prepared %d candidates (after dedup from %d)", len(prepared), len(candidates))
 
         if not prepared:
             took_ms = int((time.perf_counter() - started) * 1000)
+            logger.info("  No prepared candidates – returning empty in %dms", took_ms)
+            logger.info("────────────────────────────────────────────────")
             return SearchResponse(results=[], meta=meta_acc.build(took_ms=took_ms))
 
+        t_llm = time.perf_counter()
         ranked_map, llm_warnings, llm_cached = await self.reranker.rerank(
             query=request.query,
             context=request.context,
             candidates=prepared,
             api_key=llm_api_key,
         )
+        llm_ms = int((time.perf_counter() - t_llm) * 1000)
         if llm_warnings:
             meta_acc.warnings.extend(llm_warnings)
         meta_acc.cached = meta_acc.cached or llm_cached
+        logger.info("  LLM rerank: %d scored in %dms (cached=%s, warnings=%d)",
+                     len(ranked_map), llm_ms, llm_cached, len(llm_warnings))
 
         fallback_ranked = self.reranker._fallback_rank(  # noqa: SLF001
             query=request.query,
@@ -168,12 +223,15 @@ class SearchService:
         prepared.sort(key=_relevance_score, reverse=True)
         top_candidates = prepared[: request.limit]
 
+        t_enrich = time.perf_counter()
         await self._enrich_top_results(
             candidates=top_candidates,
             request=request,
             github_token=github_token,
             meta_acc=meta_acc,
         )
+        enrich_ms = int((time.perf_counter() - t_enrich) * 1000)
+        logger.info("  Enrich top %d: %dms", len(top_candidates), enrich_ms)
 
         response_items: list[SearchResultItem] = []
         for candidate in top_candidates:
@@ -207,6 +265,10 @@ class SearchService:
             )
 
         took_ms = int((time.perf_counter() - started) * 1000)
+        scores = [r.relevance_score for r in response_items]
+        logger.info("  Results: %d items, scores=%s", len(response_items), scores)
+        logger.info("  Timing: github=%dms llm=%dms enrich=%dms total=%dms", gh_ms, llm_ms, enrich_ms, took_ms)
+        logger.info("────────────────────────────────────────────────")
         return SearchResponse(results=response_items, meta=meta_acc.build(took_ms=took_ms))
 
     async def validate_repos(

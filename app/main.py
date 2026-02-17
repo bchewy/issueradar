@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import logging
+import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+logging.basicConfig(level=logging.INFO, format="%(name)s | %(message)s")
+logging.getLogger("issueradar").setLevel(logging.DEBUG)
+
 from fastapi import Depends, FastAPI, Header
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 
@@ -62,6 +70,14 @@ def create_app() -> FastAPI:
         same_site="lax",
         https_only=False,
     )
+    class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next) -> Response:
+            response = await call_next(request)
+            if request.url.path.startswith("/static/"):
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return response
+
+    app.add_middleware(NoCacheStaticMiddleware)
     app.include_router(auth_router)
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -72,9 +88,13 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    _cache_bust = str(int(time.time()))
+
     @app.get("/", include_in_schema=False)
-    async def frontend() -> FileResponse:
-        return FileResponse(static_dir / "index.html")
+    async def frontend() -> HTMLResponse:
+        html = (static_dir / "index.html").read_text()
+        html = re.sub(r"\.(css|js)\?v=[^\"']*", rf".\1?v={_cache_bust}", html)
+        return HTMLResponse(html)
 
     @app.post("/v1/search", response_model=SearchResponse)
     async def search(
