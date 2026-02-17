@@ -115,32 +115,17 @@ class SearchService:
                      "yes" if github_token else "no",
                      "yes" if llm_api_key else "no")
 
-        search_tasks = [
-            self._search_repo(
-                repo=repo,
-                repo_pool=repo_pool,
-                request=request,
-                github_token=github_token,
-            )
-            for repo, repo_pool in candidate_targets
-        ]
-
+        strict_query_text = self._build_user_search_text(request)
         t_gh = time.perf_counter()
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        candidates = await self._search_round(
+            candidate_targets=candidate_targets,
+            request=request,
+            github_token=github_token,
+            query_text=strict_query_text,
+            meta_acc=meta_acc,
+            warning_prefix="Search call failed",
+        )
         gh_ms = int((time.perf_counter() - t_gh) * 1000)
-
-        candidates: list[dict[str, Any]] = []
-        for result in search_results:
-            if isinstance(result, Exception):
-                meta_acc.warnings.append(f"Search call failed: {type(result).__name__}")
-                logger.warning("  GitHub search error: %s – %s", type(result).__name__, result)
-                if isinstance(result, GitHubAPIError):
-                    meta_acc.rate_limited = meta_acc.rate_limited or result.rate_limited
-                continue
-
-            repo_items, repo_meta = result
-            meta_acc.merge(repo_meta)
-            candidates.extend(repo_items)
 
         logger.info("  GitHub search: %d candidates in %dms (cached=%s)", len(candidates), gh_ms, meta_acc.cached)
 
@@ -148,32 +133,37 @@ class SearchService:
         if not candidates and request.context:
             logger.info("  Strict search returned 0; retrying with query-only (context removed)")
             relaxed_request = request.model_copy(update={"context": None})
-            relaxed_tasks = [
-                self._search_repo(
-                    repo=repo,
-                    repo_pool=repo_pool,
-                    request=relaxed_request,
-                    github_token=github_token,
-                )
-                for repo, repo_pool in candidate_targets
-            ]
             t_retry = time.perf_counter()
-            relaxed_results = await asyncio.gather(*relaxed_tasks, return_exceptions=True)
+            candidates = await self._search_round(
+                candidate_targets=candidate_targets,
+                request=relaxed_request,
+                github_token=github_token,
+                query_text=request.query,
+                meta_acc=meta_acc,
+                warning_prefix="Relaxed search call failed",
+            )
             retry_ms = int((time.perf_counter() - t_retry) * 1000)
-
-            for result in relaxed_results:
-                if isinstance(result, Exception):
-                    meta_acc.warnings.append(f"Relaxed search call failed: {type(result).__name__}")
-                    logger.warning("  Relaxed GitHub search error: %s – %s", type(result).__name__, result)
-                    if isinstance(result, GitHubAPIError):
-                        meta_acc.rate_limited = meta_acc.rate_limited or result.rate_limited
-                    continue
-
-                repo_items, repo_meta = result
-                meta_acc.merge(repo_meta)
-                candidates.extend(repo_items)
-
             logger.info("  Relaxed search: %d candidates in %dms", len(candidates), retry_ms)
+
+        # If still empty, try a few token-drop variants for typo/noise tolerance.
+        if not candidates:
+            for variant in self._relaxed_query_variants(request.query):
+                logger.info("  Still 0; retrying with variant query: %r", variant)
+                t_variant = time.perf_counter()
+                variant_candidates = await self._search_round(
+                    candidate_targets=candidate_targets,
+                    request=request.model_copy(update={"context": None}),
+                    github_token=github_token,
+                    query_text=variant,
+                    meta_acc=meta_acc,
+                    warning_prefix="Variant search call failed",
+                )
+                variant_ms = int((time.perf_counter() - t_variant) * 1000)
+                logger.info("  Variant search: %d candidates in %dms", len(variant_candidates), variant_ms)
+                if variant_candidates:
+                    candidates = variant_candidates
+                    meta_acc.warnings.append(f"Used relaxed query variant: {variant}")
+                    break
 
         if not candidates:
             took_ms = int((time.perf_counter() - started) * 1000)
@@ -327,9 +317,26 @@ class SearchService:
         request: SearchRequest,
         github_token: str | None,
     ) -> tuple[list[dict[str, Any]], GitHubCallMeta]:
+        return await self._search_repo_with_query(
+            repo=repo,
+            repo_pool=repo_pool,
+            request=request,
+            github_token=github_token,
+            query_text=self._build_user_search_text(request),
+        )
+
+    async def _search_repo_with_query(
+        self,
+        *,
+        repo: str,
+        repo_pool: int,
+        request: SearchRequest,
+        github_token: str | None,
+        query_text: str,
+    ) -> tuple[list[dict[str, Any]], GitHubCallMeta]:
         items, meta = await self.github_client.search_issues(
             repo=repo,
-            query=self._build_user_search_text(request),
+            query=query_text,
             search_type=request.type,
             state=request.state,
             labels_include=request.labels_include,
@@ -350,6 +357,42 @@ class SearchService:
             prepared_items.append(copy_item)
 
         return prepared_items, meta
+
+    async def _search_round(
+        self,
+        *,
+        candidate_targets: list[tuple[str, int]],
+        request: SearchRequest,
+        github_token: str | None,
+        query_text: str,
+        meta_acc: MetaAccumulator,
+        warning_prefix: str | None = None,
+    ) -> list[dict[str, Any]]:
+        search_tasks = [
+            self._search_repo_with_query(
+                repo=repo,
+                repo_pool=repo_pool,
+                request=request,
+                github_token=github_token,
+                query_text=query_text,
+            )
+            for repo, repo_pool in candidate_targets
+        ]
+        round_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        candidates: list[dict[str, Any]] = []
+        for result in round_results:
+            if isinstance(result, Exception):
+                prefix = warning_prefix or "Search call failed"
+                meta_acc.warnings.append(f"{prefix}: {type(result).__name__}")
+                logger.warning("  %s: %s - %s", prefix, type(result).__name__, result)
+                if isinstance(result, GitHubAPIError):
+                    meta_acc.rate_limited = meta_acc.rate_limited or result.rate_limited
+                continue
+
+            repo_items, repo_meta = result
+            meta_acc.merge(repo_meta)
+            candidates.extend(repo_items)
+        return candidates
 
     async def _enrich_candidates(
         self,
@@ -638,6 +681,34 @@ class SearchService:
         if request.context:
             return f"{request.query}\n{request.context}"
         return request.query
+
+    @staticmethod
+    def _relaxed_query_variants(query: str) -> list[str]:
+        words = [w for w in query.split() if w]
+        if len(words) < 3:
+            return []
+
+        variants: list[str] = []
+        seen: set[str] = set()
+
+        # Try dropping one token at a time (helps with typos like "failedb").
+        for idx in range(len(words)):
+            parts = words[:idx] + words[idx + 1 :]
+            if len(parts) < 2:
+                continue
+            candidate = " ".join(parts).strip()
+            if candidate and candidate not in seen and candidate != query:
+                seen.add(candidate)
+                variants.append(candidate)
+
+        # Also try a keyword-only variant as last resort.
+        keywords = [w for w in words if len(w) >= 4]
+        if len(keywords) >= 2:
+            keyword_query = " ".join(keywords[:4]).strip()
+            if keyword_query and keyword_query not in seen and keyword_query != query:
+                variants.append(keyword_query)
+
+        return variants[:4]
 
     @staticmethod
     def _select_relevant_comments(
